@@ -1,0 +1,45 @@
+{
+  "name": "ai-agent-handwritten-exam-evaluation",
+  "version": "1.0.0",
+  "description": "Node.js LangChain/LangGraph AI agent for handwritten exam evaluation.",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "langchain",
+    "langgraph",
+    "exam-evaluation",
+    "handwriting",
+    "ocr"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.624.0",
+    "@aws-sdk/s3-request-presigner": "^3.624.0",
+    "@fastify/cors": "^9.0.1",
+    "@langchain/core": "^0.3.0",
+    "@langchain/google-genai": "^0.2.18",
+    "@langchain/langgraph": "^0.2.0",
+    "@langchain/openai": "^0.3.0",
+    "fastify": "^4.28.1",
+    "file-type": "^19.4.1",
+    "nanoid": "^5.0.7",
+    "pdf-lib": "^1.17.1",
+    "pino": "^9.3.2",
+    "sharp": "^0.33.4",
+    "undici": "^6.19.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.4.1",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}
