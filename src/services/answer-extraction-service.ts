@@ -18,22 +18,46 @@ export class AnswerExtractionService {
       question_count: input.questionInventory.questions.length
     }, "Answer inventory extraction started");
     const regions = this.detectRegions(input.answerElements, input.pages);
-    const answers = regions.map((region) => ({
-      answer_id: region.detected_question_id ? `answer-${region.detected_question_id}` : `answer-${region.answer_region_id}`,
-      question_id: region.detected_question_id,
-      question_number_written: region.question_reference_text,
-      regions: [region],
-      raw_ocr_text: region.raw_ocr_text,
-      corrected_transcription: region.corrected_transcription,
-      contains_diagram: /diagram|figure|graph/i.test(region.raw_ocr_text),
-      diagram_regions: [],
-      contains_table: /\|.+\||\t/.test(region.raw_ocr_text),
-      contains_calculation: /[=+\-*/]|\btherefore\b/i.test(region.raw_ocr_text),
-      crossed_out: /crossed\s*out|\bwrong\b/i.test(region.raw_ocr_text),
-      mapping_confidence: region.mapping_confidence,
-      transcription_confidence: region.transcription_confidence,
-      requires_review: region.requires_review
-    }));
+    const elementByRegionId = new Map(input.answerElements.map((element) => [element.element_id, element]));
+    const answers = regions.map((region) => {
+      const sourceElement = elementByRegionId.get(region.answer_region_id);
+      const diagramRegions = (sourceElement?.diagram_regions ?? []).map((diagram, diagramIndex): AnswerRegion => ({
+        answer_region_id: diagram.diagram_region_id || `${region.answer_region_id}-diagram-${diagramIndex + 1}`,
+        page_number: region.page_number,
+        bbox: diagram.bbox,
+        normalized_bbox: diagram.normalized_bbox,
+        crop_s3_key: diagram.crop_s3_key,
+        raw_ocr_text: "",
+        corrected_transcription: "",
+        question_reference_text: region.question_reference_text,
+        detected_question_id: region.detected_question_id,
+        mapping_confidence: region.mapping_confidence,
+        transcription_confidence: diagram.confidence,
+        continued_on_next_page: false,
+        continuation_region_ids: [],
+        crossed_out: false,
+        blank: false,
+        requires_review: diagram.confidence < 0.5,
+        ocr_lines: []
+      }));
+      return {
+        answer_id: region.detected_question_id ? `answer-${region.detected_question_id}` : `answer-${region.answer_region_id}`,
+        question_id: region.detected_question_id,
+        question_number_written: region.question_reference_text,
+        regions: [region],
+        raw_ocr_text: region.raw_ocr_text,
+        corrected_transcription: region.corrected_transcription,
+        contains_diagram: diagramRegions.length > 0 || /diagram|figure|graph/i.test(region.raw_ocr_text),
+        diagram_regions: diagramRegions,
+        contains_table: /\|.+\||\t/.test(region.raw_ocr_text),
+        contains_calculation: /[=+\-*/]|\btherefore\b/i.test(region.raw_ocr_text),
+        crossed_out: /crossed\s*out|\bwrong\b/i.test(region.raw_ocr_text),
+        mapping_confidence: region.mapping_confidence,
+        transcription_confidence: region.transcription_confidence,
+        requires_review: region.requires_review,
+        mapping: undefined
+      };
+    });
 
     const answeredQuestionIds = new Set(answers.map((answer) => answer.question_id).filter(Boolean));
     const inventory = {
@@ -55,12 +79,15 @@ export class AnswerExtractionService {
   }
 
   private detectRegions(elements: LayoutElement[], pages: PageImage[]): AnswerRegion[] {
-    const textElements = elements.filter((element) => element.text.trim());
-    if (textElements.length > 0) {
-      return textElements.map((element, index) => {
-        const reference = extractQuestionReference(element.text);
+    const explicitAnswerElements = elements.filter((element) => element.type === "answer_region");
+    const answerElements = explicitAnswerElements.length > 0
+      ? explicitAnswerElements
+      : elements.filter((element) => element.text.trim());
+    if (answerElements.length > 0) {
+      return answerElements.map((element, index) => {
+        const reference = element.question_reference_text ?? extractQuestionReference(element.text);
         return {
-          answer_region_id: `region-${String(index + 1).padStart(3, "0")}`,
+          answer_region_id: element.element_id || `region-${String(index + 1).padStart(3, "0")}`,
           page_number: element.page_number,
           bbox: element.bbox,
           normalized_bbox: element.normalized_bbox,
@@ -68,14 +95,15 @@ export class AnswerExtractionService {
           raw_ocr_text: element.text,
           corrected_transcription: element.text,
           question_reference_text: reference,
-          detected_question_id: reference ? `q${reference.replace(/\W+/g, "_").replace(/_$/, "")}` : null,
+          detected_question_id: reference ? `Q${reference.match(/\d+/)?.[0] ?? reference}` : null,
           mapping_confidence: reference ? 0.82 : 0.4,
           transcription_confidence: element.confidence,
           continued_on_next_page: false,
           continuation_region_ids: [],
           crossed_out: /crossed\s*out|\bwrong\b/i.test(element.text),
           blank: element.text.trim().length === 0,
-          requires_review: !reference || element.confidence < 0.7
+          requires_review: !reference || element.confidence < 0.7,
+          ocr_lines: element.ocr_lines ?? []
         };
       });
     }
@@ -99,7 +127,8 @@ export class AnswerExtractionService {
         continuation_region_ids: [],
         crossed_out: false,
         blank: false,
-        requires_review: true
+        requires_review: true,
+        ocr_lines: []
       };
     });
   }

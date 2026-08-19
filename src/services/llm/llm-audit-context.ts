@@ -23,6 +23,11 @@ export type LlmInvokeAuditEvent = LlmInvokeAuditMetadata & {
   duration_ms: number;
   message_count: number;
   response_chars?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  input?: unknown;
+  output?: unknown;
   error_name?: string;
   error_message?: string;
 };
@@ -64,6 +69,11 @@ export async function emitLlmAuditEvent(event: LlmInvokeAuditEvent): Promise<voi
     duration_ms: event.duration_ms,
     message_count: event.message_count,
     response_chars: event.response_chars,
+    input_tokens: event.input_tokens,
+    output_tokens: event.output_tokens,
+    total_tokens: event.total_tokens,
+    input: event.input,
+    output: event.output,
     error_name: event.error_name,
     error_message: event.error_message,
     at: new Date().toISOString()

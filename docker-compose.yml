@@ -1,8 +1,22 @@
 services:
-  evaluation-agent:
+  handwritten-exam-evaluation-agent:
+    image: handwritten-exam-evaluation-agent:latest
     build: .
     env_file: .env
+    depends_on:
+      - paddle-ocr-service
+    environment:
+      OCR_LAYOUT_PROVIDER: paddle
+      PADDLE_LAYOUT_SERVICE_URL: http://paddle-ocr-service:8091
     ports:
       - "8081:8081"
+    volumes:
+      - ./work:/app/work
+
+  paddle-ocr-service:
+    image: paddle-ocr-service:latest
+    build: ./paddle-ocr-service
+    ports:
+      - "8091:8091"
     volumes:
       - ./work:/app/work

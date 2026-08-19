@@ -1,5 +1,6 @@
 import type { S3ObjectRef } from "./common.js";
-import type { StudentDetails } from "./answer.js";
+import type { AnswerMappingMetadata, StudentDetails } from "./answer.js";
+import type { BBox, NormalizedBBox } from "./common.js";
 
 export type PerQuestionEvaluation = {
   question_id: string;
@@ -63,6 +64,32 @@ export type FinalEvaluation = {
   };
 };
 
+export type ReviewAnswerPayload = {
+  questionCode: string;
+  maxMarks: number;
+  awardedMarks: number;
+  transcription: string;
+  handwritingImageUrl: string;
+  diagramImageUrls: string[];
+  answerRegionBBox: BBox | null;
+  normalizedAnswerRegionBBox: NormalizedBBox | null;
+  diagramRegions: Array<{
+    diagramRegionId: string;
+    bbox: BBox | null;
+    normalizedBBox: NormalizedBBox | null;
+    confidence: number;
+    imageUrl: string;
+  }>;
+  ocr: Record<string, unknown>;
+  mapping: AnswerMappingMetadata | null;
+  questionSnapshot: Record<string, unknown>;
+  criteria: PerQuestionEvaluation["rubric_breakdown"];
+  confidence: number;
+  feedback: string;
+  reviewReason: string;
+  status: "AI Evaluated" | "Needs Review";
+};
+
 export type EvaluationApiResponse = {
   evaluation_job_id: string;
   status: "completed" | "completed_with_warnings" | "failed";
@@ -86,4 +113,5 @@ export type EvaluationApiResponse = {
   warnings: Array<{ code: string; question_id?: string; message: string }>;
   student: StudentDetails;
   question_evaluations: PerQuestionEvaluation[];
+  answers?: ReviewAnswerPayload[];
 };

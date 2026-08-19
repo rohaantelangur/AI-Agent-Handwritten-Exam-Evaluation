@@ -3,6 +3,7 @@ import { logger } from "../../logger.js";
 import type { LlmClient } from "./llm-client.js";
 import { GeminiLlmClient } from "./gemini-llm-client.js";
 import { MockLlmClient } from "./mock-llm-client.js";
+import { OllamaLlmClient } from "./ollama-llm-client.js";
 import { OpenAiLlmClient } from "./openai-llm-client.js";
 
 export function createLlmClient(config: AppConfig): LlmClient {
@@ -18,6 +19,9 @@ export function createLlmClient(config: AppConfig): LlmClient {
       throw new Error("GEMINI_API_KEY or GOOGLE_API_KEY is required when LLM_PROVIDER=gemini");
     }
     return new GeminiLlmClient(config.geminiApiKey, config.geminiModel);
+  }
+  if (config.llmProvider === "ollama") {
+    return new OllamaLlmClient(config.ollamaBaseUrl, config.ollamaModel, config.ollamaRequestTimeoutMs);
   }
   return new MockLlmClient();
 }

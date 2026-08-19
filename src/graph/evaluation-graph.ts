@@ -25,6 +25,7 @@ import { MarksService } from "../services/marks-service.js";
 import { ReportService } from "../services/report-service.js";
 import { ReviewedQuestionService } from "../services/reviewed-question-service.js";
 import { createLlmClient } from "../services/llm/index.js";
+import { PaddleLayoutClient } from "../services/paddle-layout-client.js";
 
 type Warning = { code: string; question_id?: string; message: string };
 
@@ -61,7 +62,10 @@ export function createEvaluationGraph(config: AppConfig) {
   const pdfService = new PdfService(config.maxPdfPages, config.popplerBinPath);
   const imageService = new ImageService();
   const storage = new StorageService(config);
-  const layoutService = new LayoutService(pdfService, imageService, storage);
+  const paddleLayoutClient = config.ocrLayoutProvider === "paddle"
+    ? new PaddleLayoutClient(config.paddleLayoutServiceUrl, config.paddleLayoutTimeoutMs)
+    : undefined;
+  const layoutService = new LayoutService(pdfService, imageService, storage, paddleLayoutClient);
   const llm = createLlmClient(config);
   const questionExtraction = new QuestionExtractionService(llm);
   const studentExtraction = new StudentExtractionService();
@@ -225,7 +229,7 @@ export function createEvaluationGraph(config: AppConfig) {
       const answerInventory = await answerMapping.mapAnswers(
         requireValue(state.questionInventory, "questionInventory"),
         requireValue(state.answerInventory, "answerInventory"),
-        { strict: Boolean(state.request.reviewed_exam) }
+        { strict: false }
       );
       const key = storage.keyFor(s3Base(state, "answer-sheet/answer-inventory.json"));
       await storage.uploadJson(answerInventory, key);
@@ -237,7 +241,7 @@ export function createEvaluationGraph(config: AppConfig) {
         questionInventory: requireValue(state.questionInventory, "questionInventory"),
         answerInventory: requireValue(state.answerInventory, "answerInventory"),
         marksIncrement: state.request.options.marks_increment ?? config.marksIncrement,
-        strictBatch: Boolean(state.request.reviewed_exam)
+        strictBatch: false
       });
       const questionInventoryS3Key = storage.keyFor(s3Base(state, "question-paper/question-inventory.json"));
       const answerInventoryS3Key = storage.keyFor(s3Base(state, "answer-sheet/answer-inventory.json"));
@@ -297,7 +301,12 @@ export function createEvaluationGraph(config: AppConfig) {
         report: state.report ?? null,
         warnings: state.warnings,
         student: finalEvaluation.student,
-        question_evaluations: finalEvaluation.question_evaluations
+        question_evaluations: finalEvaluation.question_evaluations,
+        answers: buildReviewAnswers(
+          requireValue(state.questionInventory, "questionInventory"),
+          requireValue(state.answerInventory, "answerInventory"),
+          finalEvaluation.question_evaluations
+        )
       };
       return { response };
     }))
@@ -408,4 +417,60 @@ function buildWarnings(questionEvaluations: PerQuestionEvaluation[]): Warning[] 
       question_id: item.question_id,
       message: item.review_reason ?? "Question requires manual review"
     }));
+}
+
+function buildReviewAnswers(
+  questionInventory: QuestionInventory,
+  answerInventory: AnswerInventory,
+  evaluations: PerQuestionEvaluation[]
+): NonNullable<EvaluationApiResponse["answers"]> {
+  return evaluations.map((evaluation) => {
+    const question = questionInventory.questions.find((item) => item.question_id === evaluation.question_id);
+    const answer = answerInventory.answers.find((item) => item.question_id === evaluation.question_id);
+    const primaryRegion = answer?.regions[0] ?? null;
+    const diagramRegions = (answer?.diagram_regions ?? []).map((region) => ({
+      diagramRegionId: region.answer_region_id,
+      bbox: region.bbox,
+      normalizedBBox: region.normalized_bbox,
+      confidence: region.transcription_confidence,
+      imageUrl: region.crop_s3_key ?? ""
+    }));
+    return {
+      questionCode: question?.question_number ?? evaluation.question_id,
+      maxMarks: question?.marks ?? evaluation.maximum_marks,
+      awardedMarks: evaluation.awarded_marks,
+      transcription: answer?.corrected_transcription || answer?.raw_ocr_text || evaluation.answer_summary,
+      handwritingImageUrl: primaryRegion?.crop_s3_key ?? "",
+      diagramImageUrls: diagramRegions.map((region) => region.imageUrl).filter(Boolean),
+      answerRegionBBox: primaryRegion?.bbox ?? null,
+      normalizedAnswerRegionBBox: primaryRegion?.normalized_bbox ?? null,
+      diagramRegions,
+      ocr: {
+        rawText: answer?.raw_ocr_text ?? "",
+        correctedText: answer?.corrected_transcription ?? "",
+        confidence: answer?.transcription_confidence ?? 0,
+        lines: primaryRegion?.ocr_lines ?? []
+      },
+      mapping: answer?.mapping ?? null,
+      questionSnapshot: question
+        ? {
+            code: question.question_number,
+            text: question.question_text,
+            section: question.section_id,
+            maxMarks: question.marks,
+            expectedAnswer: question.expected_answer,
+            modelAnswer: question.expected_answer,
+            rubric: question.marking_scheme,
+            criteria: question.marking_scheme,
+            questionType: question.question_type,
+            answerType: question.question_type
+          }
+        : {},
+      criteria: evaluation.rubric_breakdown,
+      confidence: evaluation.evaluation_confidence,
+      feedback: evaluation.feedback,
+      reviewReason: evaluation.review_reason ?? "",
+      status: evaluation.requires_review || answer?.requires_review ? "Needs Review" : "AI Evaluated"
+    };
+  });
 }

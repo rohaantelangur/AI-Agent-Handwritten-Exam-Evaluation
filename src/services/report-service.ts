@@ -4,6 +4,29 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { logger } from "../logger.js";
 import type { FinalEvaluation } from "../schemas/evaluation.js";
 
+const sanitizePdfText = (value: string): string => {
+  const replacements: Array<[RegExp, string]> = [
+    [/\u2212/g, "-"],
+    [/\u2010|\u2011|\u2012|\u2013|\u2014|\u2015/g, "-"],
+    [/\u2018|\u2019|\u201A|\u201B/g, "'"],
+    [/\u201C|\u201D|\u201E|\u201F/g, '"'],
+    [/\u2026/g, "..."],
+    [/\u2022/g, "*"],
+    [/\u00A0/g, " "]
+  ];
+
+  let text = value.normalize("NFKD");
+  for (const [pattern, replacement] of replacements) {
+    text = text.replace(pattern, replacement);
+  }
+
+  // Standard pdf-lib fonts use WinAnsi, so keep report text in plain ASCII.
+  return text
+    .replace(/[\u0300-\u036F]/g, "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\x20-\x7E]/g, "?");
+};
+
 export class ReportService {
   async generatePdf(evaluation: FinalEvaluation, outputPath: string): Promise<void> {
     const startedAt = Date.now();
@@ -24,7 +47,7 @@ export class ReportService {
         page = pdf.addPage([595, 842]);
         y = 790;
       }
-      page.drawText(text.slice(0, 105), {
+      page.drawText(sanitizePdfText(text).slice(0, 105), {
         x: 50,
         y,
         size: options.size ?? 10,

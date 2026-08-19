@@ -1,5 +1,20 @@
 import type { BBox, NormalizedBBox } from "./common.js";
 
+export type LayoutOcrLine = {
+  text: string;
+  confidence: number;
+  bbox: BBox | null;
+  normalized_bbox: NormalizedBBox | null;
+};
+
+export type LayoutDiagramRegion = {
+  diagram_region_id: string;
+  bbox: BBox | null;
+  normalized_bbox: NormalizedBBox | null;
+  confidence: number;
+  crop_s3_key?: string;
+};
+
 export type LayoutElement = {
   element_id: string;
   type: "title" | "text" | "table" | "figure" | "formula" | "answer_region" | "unknown";
@@ -10,6 +25,9 @@ export type LayoutElement = {
   bbox: BBox | null;
   normalized_bbox: NormalizedBBox | null;
   s3_key?: string;
+  question_reference_text?: string | null;
+  diagram_regions?: LayoutDiagramRegion[];
+  ocr_lines?: LayoutOcrLine[];
 };
 
 export type QuestionInventory = {

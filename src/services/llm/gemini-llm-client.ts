@@ -56,7 +56,9 @@ export class GeminiLlmClient implements LlmClient {
         status: "completed",
         duration_ms: Date.now() - startedAt,
         message_count: messages.length,
-        response_chars: text.length
+        response_chars: text.length,
+        input: messages,
+        output: text
       });
       return parsed;
     } catch (error) {
@@ -71,6 +73,7 @@ export class GeminiLlmClient implements LlmClient {
         status: "failed",
         duration_ms: Date.now() - startedAt,
         message_count: messages.length,
+        input: messages,
         error_name: error instanceof Error ? error.name : "Error",
         error_message: friendlyError.message
       });

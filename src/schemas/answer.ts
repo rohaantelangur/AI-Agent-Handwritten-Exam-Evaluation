@@ -1,4 +1,5 @@
 import type { BBox, NormalizedBBox } from "./common.js";
+import type { LayoutOcrLine } from "./question.js";
 
 export type StudentDetails = Record<
   string,
@@ -29,6 +30,15 @@ export type AnswerRegion = {
   crossed_out: boolean;
   blank: boolean;
   requires_review: boolean;
+  ocr_lines?: LayoutOcrLine[];
+};
+
+export type AnswerMappingMetadata = {
+  source: "deterministic" | "fuzzy" | "llm" | "manual_required";
+  confidence: number;
+  detectedQuestionText: string | null;
+  mappedQuestionCode: string | null;
+  reason: string;
 };
 
 export type AnswerInventory = {
@@ -48,6 +58,7 @@ export type AnswerInventory = {
     mapping_confidence: number;
     transcription_confidence: number;
     requires_review: boolean;
+    mapping?: AnswerMappingMetadata;
   }>;
   unmatched_regions: AnswerRegion[];
   unanswered_question_ids: string[];

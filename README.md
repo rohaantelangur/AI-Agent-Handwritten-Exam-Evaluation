@@ -2,7 +2,7 @@
 
 Node.js, LangChain, and LangGraph service for evaluating handwritten answer sheets against a question paper.
 
-The API accepts signed PDF URLs, processes documents through deterministic services, uses LLMs only for structure/mapping/evaluation reasoning, stores evidence assets in S3, and returns evaluation JSON plus an optional PDF report.
+The API accepts signed PDF URLs, renders pages locally, calls a Python PaddleOCR/OpenCV layout service for answer and diagram coordinates, stores evidence assets in S3/local storage, and returns evaluation JSON plus an optional PDF report.
 
 ## Quick Start
 
@@ -11,6 +11,14 @@ npm install
 cp .env.example .env
 npm run dev
 ```
+
+For the full two-service OCR pipeline:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+`handwritten-exam-evaluation-agent` calls `paddle-ocr-service` at `http://paddle-ocr-service:8091`. If you use local Ollama from Docker Desktop on Windows, keep `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
 
 Endpoint:
 
@@ -56,8 +64,10 @@ If you run the Docker image, Poppler is already installed through `poppler-utils
 - Keep the S3 bucket private. Persist S3 keys, not presigned URLs.
 - Set `LLM_PROVIDER=openai` and `OPENAI_API_KEY` for OpenAI-backed live LLM evaluation.
 - Set `LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and optionally `GEMINI_MODEL` for Gemini-backed live LLM evaluation.
+- Set `LLM_PROVIDER=ollama`, `OLLAMA_MODEL=qwen2.5vl:3b`, and optionally `OLLAMA_BASE_URL` for local Ollama-backed live LLM evaluation.
+- Set `OCR_LAYOUT_PROVIDER=paddle` and `PADDLE_LAYOUT_SERVICE_URL=http://paddle-ocr-service:8091` when running the Docker Compose OCR service.
 - Use `LLM_PROVIDER=mock` for local development and tests.
-- The LLM never creates bounding boxes, file hashes, page dimensions, S3 keys, final totals, or crops.
+- The LLM never creates bounding boxes, file hashes, page dimensions, S3 keys, final totals, or crops. PaddleOCR/OpenCV creates coordinates; Node creates/uploads crops.
 
 ## Scripts
 
@@ -76,14 +86,15 @@ Fastify API
     -> stream PDFs to disk
     -> validate PDF magic/page count/hash
     -> render pages with Poppler
-    -> extract layout and crops
+    -> call PaddleOCR/OpenCV layout service for answer and diagram coordinates
+    -> crop answer/diagram evidence with sharp
     -> upload pages/crops/JSON/PDF to S3
-    -> build question inventory with LLM
+    -> build reviewed question inventory
     -> extract student details and answer regions
-    -> map answers to questions with LLM
-    -> evaluate answers with LLM
+    -> map answers deterministically/fuzzy, using LLM only for unclear labels
+    -> evaluate mapped answers one by one with LLM
     -> clamp and total marks in code
-    -> generate evidence-linked report
+    -> generate evidence-linked report and callback payload for backend persistence
 ```
 
 See [docs/api-usage.md](docs/api-usage.md) and [docs/node-integration-example.md](docs/node-integration-example.md).

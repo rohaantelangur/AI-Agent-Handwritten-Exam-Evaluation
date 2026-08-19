@@ -38,27 +38,66 @@ export class EvaluationService {
         answer_mapped: Boolean(answer)
       }, "Question evaluation started");
       const fallback = buildFallbackEvaluation(question, answer);
-      const rawEvaluation = await this.llm.invokeJson<PerQuestionEvaluation>(
-        [
-          { role: "system", content: answerEvaluationPrompt },
-          {
-            role: "user",
-            content: JSON.stringify(
-              {
-                question,
-                answer,
-                maximum_marks: question.marks,
-                expected_answer: question.expected_answer,
-                marking_scheme: question.marking_scheme
-              },
-              null,
-              2
-            )
-          }
-        ],
-        fallback,
-        { operation: "answer_evaluation", stage: "evaluating_answers", question_id: question.question_id }
-      );
+      let rawEvaluation: PerQuestionEvaluation | Partial<PerQuestionEvaluation> = fallback;
+      try {
+        rawEvaluation = await this.llm.invokeJson<PerQuestionEvaluation>(
+          [
+            { role: "system", content: answerEvaluationPrompt },
+            {
+              role: "user",
+              content: JSON.stringify(
+                {
+                  questionSnapshot: {
+                    code: question.question_number,
+                    text: question.question_text,
+                    section: question.section_id,
+                    maxMarks: question.marks,
+                    expectedAnswer: question.expected_answer,
+                    modelAnswer: question.expected_answer,
+                    rubric: question.marking_scheme,
+                    criteria: question.marking_scheme,
+                    questionType: question.question_type,
+                    answerType: question.question_type
+                  },
+                  answer: answer
+                    ? {
+                        ocrText: answer.corrected_transcription || answer.raw_ocr_text,
+                        answerCropS3Key: answer.regions[0]?.crop_s3_key,
+                        diagramCropS3Keys: answer.diagram_regions.map((region) => region.crop_s3_key).filter(Boolean),
+                        bbox: answer.regions[0]?.bbox ?? null,
+                        normalized_bbox: answer.regions[0]?.normalized_bbox ?? null,
+                        containsDiagram: answer.contains_diagram,
+                        ocrConfidence: answer.transcription_confidence,
+                        mapping: answer.mapping ?? null
+                      }
+                    : null,
+                  evaluationInstructions: "Evaluate only the supplied question against the supplied student answer. If text or diagram evidence is insufficient, mark requiresReview true.",
+                  marksIncrement: input.marksIncrement
+                },
+                null,
+                2
+              )
+            }
+          ],
+          fallback,
+          { operation: "answer_evaluation", stage: "evaluating_answers", question_id: question.question_id }
+        );
+      } catch (error) {
+        logger.warn({
+          question_id: question.question_id,
+          err: error
+        }, "Question evaluation LLM failed; marking answer for review");
+        rawEvaluation = {
+          ...fallback,
+          recommended_marks: 0,
+          status: "requires_review",
+          feedback: "AI evaluation failed for this answer. Teacher review is required.",
+          improvement_suggestion: "Ask a teacher to review the original crop and OCR text.",
+          evaluation_confidence: 0,
+          requires_review: true,
+          review_reason: error instanceof Error ? error.message : "AI evaluation failed."
+        };
+      }
       const llmEvaluation = normalizePerQuestionEvaluation(rawEvaluation, fallback);
       const finalized = this.marksService.finalizeQuestionEvaluation(llmEvaluation, question.marks, input.marksIncrement);
       logger.info({
