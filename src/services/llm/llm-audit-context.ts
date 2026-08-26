@@ -25,7 +25,9 @@ export type LlmInvokeAuditEvent = LlmInvokeAuditMetadata & {
   response_chars?: number;
   input_tokens?: number;
   output_tokens?: number;
+  cached_tokens?: number;
   total_tokens?: number;
+  usage?: unknown;
   input?: unknown;
   output?: unknown;
   error_name?: string;
@@ -71,7 +73,9 @@ export async function emitLlmAuditEvent(event: LlmInvokeAuditEvent): Promise<voi
     response_chars: event.response_chars,
     input_tokens: event.input_tokens,
     output_tokens: event.output_tokens,
+    cached_tokens: event.cached_tokens,
     total_tokens: event.total_tokens,
+    usage: event.usage,
     input: event.input,
     output: event.output,
     error_name: event.error_name,
@@ -105,4 +109,87 @@ export async function emitLlmAuditEvent(event: LlmInvokeAuditEvent): Promise<voi
       err: error
     }, "LLM DB audit failed");
   }
+}
+
+export function llmUsageFromResponse(response: unknown): Partial<LlmInvokeAuditEvent> {
+  const record = asRecord(response) || {};
+  const responseMetadata = asRecord(record.response_metadata) || asRecord(record.responseMetadata);
+  const usage =
+    asRecord(record.usage_metadata) ||
+    asRecord(record.usageMetadata) ||
+    asRecord(responseMetadata?.tokenUsage) ||
+    asRecord(responseMetadata?.usage) ||
+    asRecord(record.usage);
+
+  if (!usage) return {};
+
+  const inputTokenDetails =
+    asRecord(usage.input_tokens_details) ||
+    asRecord(usage.inputTokensDetails) ||
+    asRecord(usage.input_token_details) ||
+    asRecord(usage.inputTokenDetails) ||
+    asRecord(usage.prompt_tokens_details) ||
+    asRecord(usage.promptTokensDetails) ||
+    {};
+
+  const inputTokens = firstFiniteNumber(
+    usage.input_tokens,
+    usage.inputTokens,
+    usage.input_token_count,
+    usage.inputTokenCount,
+    usage.prompt_tokens,
+    usage.promptTokens,
+    usage.prompt_token_count,
+    usage.promptTokenCount
+  );
+  const outputTokens = firstFiniteNumber(
+    usage.output_tokens,
+    usage.outputTokens,
+    usage.output_token_count,
+    usage.outputTokenCount,
+    usage.completion_tokens,
+    usage.completionTokens,
+    usage.completion_token_count,
+    usage.completionTokenCount,
+    usage.candidates_token_count,
+    usage.candidatesTokenCount
+  );
+  const cachedTokens = firstFiniteNumber(
+    usage.cached_tokens,
+    usage.cachedTokens,
+    usage.input_cached_tokens,
+    usage.inputCachedTokens,
+    usage.cached_content_token_count,
+    usage.cachedContentTokenCount,
+    inputTokenDetails.cached_tokens,
+    inputTokenDetails.cachedTokens,
+    inputTokenDetails.cache_read,
+    inputTokenDetails.cacheRead
+  );
+  const totalTokens = firstFiniteNumber(
+    usage.total_tokens,
+    usage.totalTokens,
+    usage.total_token_count,
+    usage.totalTokenCount
+  );
+
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cached_tokens: cachedTokens,
+    total_tokens: totalTokens || inputTokens + outputTokens || undefined,
+    usage
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function firstFiniteNumber(...values: unknown[]): number {
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return 0;
 }

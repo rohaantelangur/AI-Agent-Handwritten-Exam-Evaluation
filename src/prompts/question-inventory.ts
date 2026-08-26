@@ -9,5 +9,9 @@ Rules:
 4. If coordinates are null, keep them null.
 5. Fix only obvious OCR spacing errors.
 6. Mark uncertain fields with lower confidence and requires_review=true.
-7. Return JSON only.
+7. Include a complete marking_scheme/rubric for every question; never leave rubric empty.
+8. If the paper includes a rubric, preserve all criteria and marks. If it does not, generate a fair teacher rubric from the question and marks.
+9. Rubric criteria must cover all valid answer paths, including alternate solution methods, partial-credit steps, formulas, units, diagrams, reasoning, and final answer where applicable.
+10. If marks are known, rubric marks must add up exactly to the question marks.
+11. Return JSON only.
 `;

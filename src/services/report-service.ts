@@ -1,34 +1,20 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import puppeteer from "puppeteer";
 import { logger } from "../logger.js";
+import type { AnswerInventory } from "../schemas/answer.js";
 import type { FinalEvaluation } from "../schemas/evaluation.js";
+import type { QuestionInventory } from "../schemas/question.js";
+import { generateEvaluationReportHtml, type EvaluationReportTemplateData } from "./report-template.js";
 
-const sanitizePdfText = (value: string): string => {
-  const replacements: Array<[RegExp, string]> = [
-    [/\u2212/g, "-"],
-    [/\u2010|\u2011|\u2012|\u2013|\u2014|\u2015/g, "-"],
-    [/\u2018|\u2019|\u201A|\u201B/g, "'"],
-    [/\u201C|\u201D|\u201E|\u201F/g, '"'],
-    [/\u2026/g, "..."],
-    [/\u2022/g, "*"],
-    [/\u00A0/g, " "]
-  ];
-
-  let text = value.normalize("NFKD");
-  for (const [pattern, replacement] of replacements) {
-    text = text.replace(pattern, replacement);
-  }
-
-  // Standard pdf-lib fonts use WinAnsi, so keep report text in plain ASCII.
-  return text
-    .replace(/[\u0300-\u036F]/g, "")
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/[^\x20-\x7E]/g, "?");
+export type ReportGenerationContext = {
+  questionInventory?: QuestionInventory;
+  answerInventory?: AnswerInventory;
+  resolveAssetUrl?: (key: string) => Promise<string>;
 };
 
 export class ReportService {
-  async generatePdf(evaluation: FinalEvaluation, outputPath: string): Promise<void> {
+  async generatePdf(evaluation: FinalEvaluation, outputPath: string, context: ReportGenerationContext = {}): Promise<void> {
     const startedAt = Date.now();
     logger.info({
       evaluation_job_id: evaluation.evaluation_job_id,
@@ -36,61 +22,124 @@ export class ReportService {
       question_count: evaluation.question_evaluations.length
     }, "PDF report generation started");
     await mkdir(dirname(outputPath), { recursive: true });
-    const pdf = await PDFDocument.create();
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-    let page = pdf.addPage([595, 842]);
-    let y = 790;
 
-    const write = (text: string, options: { size?: number; bold?: boolean; color?: ReturnType<typeof rgb> } = {}) => {
-      if (y < 60) {
-        page = pdf.addPage([595, 842]);
-        y = 790;
-      }
-      page.drawText(sanitizePdfText(text).slice(0, 105), {
-        x: 50,
-        y,
-        size: options.size ?? 10,
-        font: options.bold ? bold : font,
-        color: options.color ?? rgb(0.08, 0.09, 0.11)
+    const html = generateEvaluationReportHtml(await this.buildReportData(evaluation, context));
+    const browser = await puppeteer.launch({
+      headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+    });
+
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: "load", timeout: 60_000 });
+      await page.evaluate(() => document.fonts.ready);
+      const pdf = await page.pdf({
+        format: "A4",
+        printBackground: true,
+        preferCSSPageSize: true,
+        margin: {
+          top: "0",
+          right: "0",
+          bottom: "0",
+          left: "0"
+        }
       });
-      y -= (options.size ?? 10) + 8;
-    };
-
-    write("Student Evaluation Report", { size: 22, bold: true });
-    write(`Exam: ${evaluation.exam.title ?? evaluation.exam.subject ?? "Exam"}`, { size: 12 });
-    write(`Job: ${evaluation.evaluation_job_id}`, { size: 10 });
-    write(`Marks: ${evaluation.summary.awarded_marks} / ${evaluation.summary.maximum_marks} (${evaluation.summary.percentage}%)`, { size: 14, bold: true });
-    y -= 10;
-    write("Performance Summary", { size: 16, bold: true });
-    write(`Attempted: ${evaluation.summary.attempted_questions}`);
-    write(`Unanswered: ${evaluation.summary.unanswered_questions}`);
-    write(`Correct: ${evaluation.summary.correct_questions}`);
-    write(`Partially correct: ${evaluation.summary.partially_correct_questions}`);
-    write(`Incorrect: ${evaluation.summary.incorrect_questions}`);
-    write(`Manual review: ${evaluation.summary.questions_requiring_review}`);
-
-    y -= 10;
-    write("Question-wise Evaluation", { size: 16, bold: true });
-    for (const item of evaluation.question_evaluations) {
-      write(`${item.question_id}: ${item.awarded_marks}/${item.maximum_marks} - ${item.status}`, { bold: true });
-      write(`Feedback: ${item.feedback}`);
-      write(`Improve: ${item.improvement_suggestion}`);
-      if (item.requires_review) write(`Review: ${item.review_reason ?? "Manual review required"}`, { color: rgb(0.65, 0.18, 0.12) });
-      y -= 4;
+      await writeFile(outputPath, pdf);
+    } finally {
+      await browser.close();
     }
 
-    y -= 10;
-    write("Audit Assets", { size: 16, bold: true });
-    write(`Question inventory: ${evaluation.assets.question_inventory_s3_key}`);
-    write(`Answer inventory: ${evaluation.assets.answer_inventory_s3_key}`);
-    write(`Evaluation JSON: ${evaluation.assets.evaluation_json_s3_key}`);
-
-    await writeFile(outputPath, await pdf.save());
     logger.info({
       evaluation_job_id: evaluation.evaluation_job_id,
       outputPath,
       duration_ms: Date.now() - startedAt
     }, "PDF report generation completed");
   }
+
+  private async buildReportData(evaluation: FinalEvaluation, context: ReportGenerationContext): Promise<EvaluationReportTemplateData> {
+    const questionById = new Map((context.questionInventory?.questions ?? []).map((question) => [question.question_id, question]));
+    const answerByQuestionId = new Map(
+      (context.answerInventory?.answers ?? [])
+        .filter((answer) => answer.question_id)
+        .map((answer) => [answer.question_id as string, answer])
+    );
+
+    return {
+      institute: {
+        name: studentValue(evaluation, "school_or_institute")
+      },
+      exam: {
+        name: evaluation.exam.title ?? evaluation.exam.subject ?? "Exam",
+        subject: evaluation.exam.subject,
+        className: evaluation.exam.class,
+        code: evaluation.exam_id,
+        date: studentValue(evaluation, "exam_date")
+      },
+      student: {
+        name: studentValue(evaluation, "student_name"),
+        rollNumber: studentValue(evaluation, "roll_number"),
+        seatNumber: studentValue(evaluation, "seat_number"),
+        className: studentValue(evaluation, "class")
+      },
+      summary: {
+        totalMarks: evaluation.summary.maximum_marks,
+        obtainedMarks: evaluation.summary.awarded_marks,
+        percentage: evaluation.summary.percentage,
+        correctAnswers: evaluation.summary.correct_questions,
+        attemptedQuestions: evaluation.summary.attempted_questions,
+        reviewQuestions: evaluation.summary.questions_requiring_review,
+        result: evaluation.status === "completed_with_warnings" ? "Needs Review" : "Completed",
+        evaluatedAt: new Date().toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric"
+        }),
+        strengths: evaluation.overall_feedback.strengths,
+        improvements: evaluation.overall_feedback.areas_for_improvement,
+        overallFeedback: [
+          ...evaluation.overall_feedback.recommended_topics.map((topic) => `Recommended topic: ${topic}`),
+          ...evaluation.overall_feedback.study_plan.map((step) => `Study plan: ${step}`)
+        ].join("\n")
+      },
+      questions: await Promise.all(evaluation.question_evaluations.map(async (item, index) => {
+        const question = questionById.get(item.question_id);
+        const answer = answerByQuestionId.get(item.question_id);
+        const primaryRegion = answer?.regions.find((region) => region.crop_s3_key) ?? answer?.regions[0] ?? null;
+        const answerImageUrl = primaryRegion?.crop_s3_key && context.resolveAssetUrl
+          ? await context.resolveAssetUrl(primaryRegion.crop_s3_key)
+          : null;
+        return {
+          questionNumber: question?.question_number ?? item.question_id ?? String(index + 1),
+          section: question?.section_id ?? null,
+          question: question?.question_text ?? item.question_id,
+          maxMarks: question?.marks ?? item.maximum_marks,
+          awardedMarks: item.awarded_marks,
+          page: primaryRegion?.page_number ?? null,
+          answerImageUrl,
+          extractedAnswer: answer?.corrected_transcription || answer?.raw_ocr_text || item.answer_summary,
+          feedback: item.feedback,
+          strengths: item.correct_points.map((point) => point.point),
+          improvements: [
+            ...item.missing_points,
+            ...item.incorrect_points,
+            item.improvement_suggestion
+          ].filter(Boolean),
+          correctAnswer: question?.expected_answer ?? null,
+          rubric: item.rubric_breakdown.map((criterion) => ({
+            criterion: criterion.criterion,
+            maxMarks: criterion.maximum_marks,
+            awardedMarks: criterion.awarded_marks,
+            feedback: criterion.reason
+          })),
+          confidence: item.evaluation_confidence,
+          requiresReview: item.requires_review
+        };
+      }))
+    };
+  }
+}
+
+function studentValue(evaluation: FinalEvaluation, field: string): string | null {
+  return evaluation.student[field]?.value ?? null;
 }

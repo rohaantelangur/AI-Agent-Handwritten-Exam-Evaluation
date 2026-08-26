@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { nanoid } from "nanoid";
 import type { AppConfig } from "../config.js";
@@ -270,7 +271,11 @@ export function createEvaluationGraph(config: AppConfig) {
         return { report: null };
       }
       const reportPath = join(state.workDir, "reports", "student-evaluation-report.pdf");
-      await reportService.generatePdf(requireValue(state.finalEvaluation, "finalEvaluation"), reportPath);
+      await reportService.generatePdf(requireValue(state.finalEvaluation, "finalEvaluation"), reportPath, {
+        questionInventory: requireValue(state.questionInventory, "questionInventory"),
+        answerInventory: requireValue(state.answerInventory, "answerInventory"),
+        resolveAssetUrl: (key) => temporaryBrowserUrl(storage, key)
+      });
       const key = storage.keyFor(s3Base(state, "reports/student-evaluation-report.pdf"));
       const report = await storage.uploadFile(reportPath, key, "application/pdf");
       report.temporary_url = await storage.temporaryUrl(key);
@@ -400,6 +405,12 @@ async function uploadPages(
     ));
     page.s3_key = (await storage.uploadFile(page.localPath, key, "image/png")).key;
   }
+}
+
+async function temporaryBrowserUrl(storage: StorageService, key: string): Promise<string> {
+  const url = await storage.temporaryUrl(key, 3600);
+  if (!url.startsWith("local://")) return url;
+  return pathToFileURL(url.slice("local://".length)).href;
 }
 
 function requireValue<T>(value: T | null | undefined, name: string): T {
